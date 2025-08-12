@@ -16,7 +16,7 @@ defineProps<{myItem:Chat.History,myObj?:gptConfigType, index: any}>()
         <span v-if="!myObj" class="list-item-title">{{ myItem.title }}</span>
         <n-popover v-else   placement="right-start" trigger="hover">
             <template #trigger>
-            {{ myItem.title }}
+            <span class="list-item-title">{{ myItem.title }}</span>
             </template>
             <ul  > 
             <template v-if="myObj.gpts">
@@ -35,7 +35,7 @@ defineProps<{myItem:Chat.History,myObj?:gptConfigType, index: any}>()
     </div>
 </template>
 
-<style scoped>
+<style>
 .list-item-title {
 	display: inline-block;
     width: 85%;
