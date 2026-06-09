@@ -27,10 +27,14 @@ function http<T = any>(
     const authStore = useAuthStore()
     if (res.data.code === 200 ){
       return res.data
-    }else{
+    }
+    if (onDownloadProgress && typeof res.data === 'string') {
+      return { code: 200, data: res.data as T, msg: 'success', rows: [] }
+    }
+    else{
       authStore.removeToken()
       window.location.reload()
-    } 
+    }
     return Promise.reject(res.data)
   }
 

@@ -34,7 +34,15 @@ export const useAuthStore = defineStore('auth-store', {
         homeStore.setMyData({session: data });
 
         let str = localStorage.getItem('gptConfigStore');
-        if( ! str ) setTimeout( ()=>  gptConfigStore.setInit() , 500); 
+        const sessionData = data as SessionResponse & { amodel?: string; cmodels?: string }
+        const configuredModels = (sessionData.cmodels || sessionData.amodel || '').split(',').map(model => model.trim()).filter(Boolean)
+        if( ! str ) setTimeout( ()=>  gptConfigStore.setInit() , 500);
+        else if (sessionData.amodel && configuredModels.length && !configuredModels.includes(gptConfigStore.myData.model)) {
+          gptConfigStore.setMyData({
+            model: sessionData.amodel,
+            modelLabel: sessionData.amodel,
+          })
+        }
         return Promise.resolve(data)
       }
       catch (error) {

@@ -1,170 +1,151 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Plugin } from 'vite'
-import path from 'path'
-import { defineConfig, loadEnv } from 'vite'
-import vue from '@vitejs/plugin-vue'
-import { VitePWA } from 'vite-plugin-pwa'
-import { createSvgIconsPlugin } from 'vite-plugin-svg-icons'
+import http from 'node:http'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-interface LocalAiEnv {
-  AI_PROVIDER?: string
-  AI_API_BASE_URL?: string
-  AI_API_KEY?: string
-  AI_MODEL?: string
-  AI_CUSTOM_MODELS?: string
-  DEEPSEEK_API_BASE_URL?: string
-  DEEPSEEK_API_KEY?: string
-  DEEPSEEK_MODEL?: string
-  DEEPSEEK_CUSTOM_MODELS?: string
-  SILICONFLOW_API_BASE_URL?: string
-  SILICONFLOW_API_KEY?: string
-  SILICONFLOW_MODEL?: string
-  SILICONFLOW_CUSTOM_MODELS?: string
-  AI_SESSION_NOTIFY?: string
-  AI_AUTH_TOKEN?: string
-  VITE_APP_API_BASE_URL?: string
-  VITE_GLOB_APP_PWA?: string
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const projectRoot = path.resolve(__dirname, '..')
+const env = loadEnv(projectRoot)
+const host = env.HOST || '0.0.0.0'
+const port = Number(env.PORT || 5001)
 
-interface AiProviderConfig {
-  provider: 'deepseek' | 'siliconflow'
-  apiKey?: string
-  baseUrl: string
-  model: string
-  customModels: string
-}
-
-interface ChatProcessBody {
-  prompt?: string
-  options?: {
-    conversationId?: string
-    parentMessageId?: string
+const server = http.createServer(async (req, res) => {
+  try {
+    await handleRequest(req, res, env)
   }
-  systemMessage?: string
-  temperature?: number
-  top_p?: number
-}
-
-interface ChatSendBody {
-  max_tokens?: number
-  model?: string
-  temperature?: number
-  top_p?: number
-  presence_penalty?: number
-  frequency_penalty?: number
-  messages?: Array<{ role: string; content: string }>
-  stream?: boolean
-  kid?: string
-  chat_type?: number
-  appId?: string
-}
-
-interface OpenAIStreamChoice {
-  index?: number
-  delta?: {
-    content?: string
-    reasoning_content?: string
+  catch (error) {
+    if (!res.headersSent)
+      sendJson(res, 500, fail(500, sanitizeError(error?.message || 'Internal server error')))
+    else
+      res.end()
   }
-  text?: string
-  finish_reason?: string | null
-  logprobs?: unknown
-}
+})
 
-interface OpenAIStreamChunk {
-  id?: string
-  object?: string
-  created?: number
-  model?: string
-  choices?: OpenAIStreamChoice[]
-  usage?: {
-    completion_tokens?: number
-    prompt_tokens?: number
-    total_tokens?: number
+server.listen(port, host, () => {
+  const provider = getAiProviderConfig(env)
+  console.log(`[ai-api] listening on http://${host}:${port}`)
+  console.log(`[ai-api] provider=${provider.provider} model=${provider.model || '(not configured)'}`)
+})
+
+function loadEnv(rootDir) {
+  const fileEnv = {
+    ...readEnvFile(path.join(rootDir, '.env')),
+    ...readEnvFile(path.join(rootDir, '.env.local')),
   }
-}
 
-function setupPlugins(env: LocalAiEnv) {
-  return [
-    localAiApiPlugin(env),
-    vue(),
-    env.VITE_GLOB_APP_PWA === 'true' && VitePWA({
-      injectRegister: 'auto',
-      manifest: {
-        name: 'chatGPT',
-        short_name: 'chatGPT',
-        icons: [
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
-        ],
-      },
-    }),
-    createSvgIconsPlugin({
-      // 指定需要缓存的图标文件夹
-      iconDirs: [path.resolve(process.cwd(), 'src/assets/icons')],
-      // 指定 symbolId 格式
-      symbolId: 'icon-[name]',
-    }),
-  ].filter(Boolean) // 过滤掉 falsy 值
-}
-
-function localAiApiPlugin(env: LocalAiEnv): Plugin {
   return {
-    name: 'local-ai-api',
-    configureServer(server) {
-      server.middlewares.use('/api/session', async (_req, res) => {
-        const provider = getAiProviderConfig(env)
-        sendJson(res, 200, ok({
-          auth: Boolean(env.AI_AUTH_TOKEN),
-          model: 'ChatGPTAPI',
-          amodel: provider.model,
-          notify: env.AI_SESSION_NOTIFY || '',
-          isCloseMdPreview: false,
-          cmodels: provider.customModels,
-        }))
-      })
-
-      server.middlewares.use('/api/verify', async (req, res) => {
-        if (!env.AI_AUTH_TOKEN) {
-          sendJson(res, 200, ok(true))
-          return
-        }
-
-        const body = await readJsonBody<{ token?: string }>(req)
-        if (body.token === env.AI_AUTH_TOKEN)
-          sendJson(res, 200, ok(true))
-        else
-          sendJson(res, 200, { code: 401, msg: 'Invalid token', data: false, rows: [] })
-      })
-
-      server.middlewares.use('/api/system/model/modelList', async (_req, res) => {
-        const models = getAiModels(env).map(model => ({
-          modelName: model,
-          modelDescribe: model,
-          maxToken: 4096,
-          modelCapability: '["TEXT"]',
-          modelAbilities: [{ name: 'TEXT', description: 'Text chat' }],
-        }))
-
-        sendJson(res, 200, ok(models))
-      })
-
-      server.middlewares.use('/api/chat-process', async (req, res) => {
-        await handleChatProcess(req, res, env)
-      })
-
-      server.middlewares.use('/api/chat/send', async (req, res) => {
-        await handleChatSend(req, res, env)
-      })
-    },
+    ...fileEnv,
+    ...process.env,
   }
 }
 
-async function handleChatProcess(req: IncomingMessage, res: ServerResponse, env: LocalAiEnv) {
-  const body = await readJsonBody<ChatProcessBody>(req)
+function readEnvFile(filePath) {
+  if (!existsSync(filePath))
+    return {}
+
+  const result = {}
+  const raw = readFileSync(filePath, 'utf8')
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#'))
+      continue
+
+    const equalIndex = trimmed.indexOf('=')
+    if (equalIndex === -1)
+      continue
+
+    const key = trimmed.slice(0, equalIndex).trim()
+    let value = trimmed.slice(equalIndex + 1).trim()
+
+    if (!key)
+      continue
+
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+      value = value.slice(1, -1)
+
+    result[key] = value
+  }
+
+  return result
+}
+
+async function handleRequest(req, res, env) {
+  setCommonHeaders(res)
+
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204
+    res.end()
+    return
+  }
+
+  const url = new URL(req.url || '/', 'http://localhost')
+  const pathname = url.pathname.replace(/\/+$/, '') || '/'
+
+  if (req.method === 'GET' && pathname === '/healthz') {
+    sendJson(res, 200, ok({ status: 'ok', provider: getAiProviderConfig(env).provider }))
+    return
+  }
+
+  if (pathname === '/api/session') {
+    const provider = getAiProviderConfig(env)
+    sendJson(res, 200, ok({
+      auth: Boolean(env.AI_AUTH_TOKEN),
+      model: 'ChatGPTAPI',
+      amodel: provider.model,
+      notify: env.AI_SESSION_NOTIFY || '',
+      isCloseMdPreview: false,
+      cmodels: provider.customModels,
+    }))
+    return
+  }
+
+  if (pathname === '/api/verify') {
+    if (!env.AI_AUTH_TOKEN) {
+      sendJson(res, 200, ok(true))
+      return
+    }
+
+    const body = await readJsonBody(req)
+    if (body.token === env.AI_AUTH_TOKEN)
+      sendJson(res, 200, ok(true))
+    else
+      sendJson(res, 200, fail(401, 'Invalid token', false))
+    return
+  }
+
+  if (pathname === '/api/system/model/modelList') {
+    const models = getAiModels(env).map(model => ({
+      modelName: model,
+      modelDescribe: model,
+      maxToken: 4096,
+      modelCapability: '["TEXT"]',
+      modelAbilities: [{ name: 'TEXT', description: 'Text chat' }],
+    }))
+
+    sendJson(res, 200, ok(models))
+    return
+  }
+
+  if (pathname === '/api/chat-process') {
+    await handleChatProcess(req, res, env)
+    return
+  }
+
+  if (pathname === '/api/chat/send') {
+    await handleChatSend(req, res, env)
+    return
+  }
+
+  sendJson(res, 404, fail(404, `Not found: ${pathname}`))
+}
+
+async function handleChatProcess(req, res, env) {
+  const body = await readJsonBody(req)
   const messages = [
     body.systemMessage && { role: 'system', content: body.systemMessage },
     body.prompt?.trim() && { role: 'user', content: body.prompt.trim() },
-  ].filter(Boolean) as ChatSendBody['messages']
+  ].filter(Boolean)
 
   if (!body.prompt?.trim()) {
     const provider = getAiProviderConfig(env)
@@ -191,9 +172,10 @@ async function handleChatProcess(req: IncomingMessage, res: ServerResponse, env:
   })
 }
 
-async function handleChatSend(req: IncomingMessage, res: ServerResponse, env: LocalAiEnv) {
-  const body = await readJsonBody<ChatSendBody>(req)
+async function handleChatSend(req, res, env) {
+  const body = await readJsonBody(req)
   const provider = getAiProviderConfig(env)
+
   await proxyOpenAiChatCompletion(req, res, env, {
     ...body,
     model: resolveProviderModel(provider, body.model),
@@ -202,11 +184,7 @@ async function handleChatSend(req: IncomingMessage, res: ServerResponse, env: Lo
   }, { mode: 'sse' })
 }
 
-async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerResponse, env: LocalAiEnv, payload: ChatSendBody, options: {
-  mode: 'json-line' | 'sse'
-  conversationId?: string
-  parentMessageId?: string
-}) {
+async function proxyOpenAiChatCompletion(req, res, env, payload, options) {
   const provider = getAiProviderConfig(env)
   const model = payload.model || provider.model
   const conversationId = options.conversationId || createId('conv')
@@ -215,7 +193,7 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
   const apiKey = provider.apiKey
 
   if (!apiKey) {
-    writeProxyError(res, options.mode, { conversationId, parentMessageId, messageId, model, text: 'AI_API_KEY 未配置。请在 .env.local 中配置非 VITE_ 前缀的模型 Key。' })
+    writeProxyError(res, options.mode, { conversationId, parentMessageId, messageId, model, text: 'AI_API_KEY 未配置。请在服务器 .env 或环境变量中配置非 VITE_ 前缀的模型 Key。' })
     return
   }
 
@@ -227,7 +205,12 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
   const baseUrl = normalizeBaseUrl(provider.baseUrl)
   const controller = new AbortController()
   let streamStarted = false
-  res.on('close', () => controller.abort())
+  let responseEnded = false
+
+  res.on('close', () => {
+    if (!responseEnded)
+      controller.abort()
+  })
 
   try {
     const upstream = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -267,6 +250,7 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
     res.setHeader('Content-Type', options.mode === 'sse' ? 'text/event-stream; charset=utf-8' : 'text/plain; charset=utf-8')
     res.setHeader('Cache-Control', 'no-cache, no-transform')
     res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
 
     const reader = upstream.body.getReader()
     const decoder = new TextDecoder()
@@ -295,7 +279,7 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
         }
 
         try {
-          const chunk = JSON.parse(data) as OpenAIStreamChunk
+          const chunk = JSON.parse(data)
           const choice = chunk.choices?.[0]
           const text = choice?.delta?.content || choice?.delta?.reasoning_content || choice?.text || ''
           const finishReason = choice?.finish_reason ?? null
@@ -317,7 +301,7 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
           })
         }
         catch {
-          // 忽略供应商返回的非 JSON 心跳行
+          // Ignore non-JSON heartbeat lines from providers.
         }
       }
     }
@@ -325,9 +309,13 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
     if (!hasFinalChunk)
       writeProxyDone(res, options.mode, { conversationId, parentMessageId, messageId, model, text: accumulatedText })
 
+    responseEnded = true
     res.end()
   }
-  catch (error: any) {
+  catch (error) {
+    if (error?.name === 'AbortError')
+      return
+
     if (streamStarted) {
       writeProxyChunk(res, options.mode, {
         conversationId,
@@ -338,6 +326,7 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
         deltaText: `请求失败：${sanitizeError(error?.message || 'Provider stream error')}`,
         finishReason: 'stop',
       })
+      responseEnded = true
       res.end()
       return
     }
@@ -352,45 +341,25 @@ async function proxyOpenAiChatCompletion(req: IncomingMessage, res: ServerRespon
   }
 }
 
-function writeChatError(res: ServerResponse, { conversationId, parentMessageId, messageId, model, text }: {
-  conversationId: string
-  parentMessageId: string
-  messageId: string
-  model: string
-  text: string
-}) {
+function writeChatError(res, { conversationId, parentMessageId, messageId, model, text }) {
   res.statusCode = 200
   res.setHeader('Content-Type', 'text/plain; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('X-Accel-Buffering', 'no')
   writeChatChunk(res, createChatChunk({ conversationId, parentMessageId, messageId, model, text, finishReason: 'stop' }))
   res.end()
 }
 
-function writeProxyError(res: ServerResponse, mode: 'json-line' | 'sse', payload: {
-  conversationId: string
-  parentMessageId: string
-  messageId: string
-  model: string
-  text: string
-}) {
+function writeProxyError(res, mode, payload) {
   res.statusCode = 200
   res.setHeader('Content-Type', mode === 'sse' ? 'text/event-stream; charset=utf-8' : 'text/plain; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('X-Accel-Buffering', 'no')
   writeProxyChunk(res, mode, { ...payload, deltaText: payload.text, finishReason: 'stop' })
   res.end()
 }
 
-function writeProxyChunk(res: ServerResponse, mode: 'json-line' | 'sse', payload: {
-  conversationId: string
-  parentMessageId: string
-  messageId: string
-  model: string
-  text: string
-  deltaText: string
-  finishReason: string | null
-  upstream?: OpenAIStreamChunk
-  choice?: OpenAIStreamChoice
-}) {
+function writeProxyChunk(res, mode, payload) {
   if (mode === 'sse') {
     const chunk = createOpenAIChunk(payload)
     res.write(`data: ${JSON.stringify(chunk)}\n\n`)
@@ -400,13 +369,7 @@ function writeProxyChunk(res: ServerResponse, mode: 'json-line' | 'sse', payload
   writeChatChunk(res, createChatChunk(payload))
 }
 
-function writeProxyDone(res: ServerResponse, mode: 'json-line' | 'sse', payload: {
-  conversationId: string
-  parentMessageId: string
-  messageId: string
-  model: string
-  text: string
-}) {
+function writeProxyDone(res, mode, payload) {
   if (mode === 'sse') {
     res.write('data: [DONE]\n\n')
     return
@@ -415,14 +378,7 @@ function writeProxyDone(res: ServerResponse, mode: 'json-line' | 'sse', payload:
   writeChatChunk(res, createChatChunk({ ...payload, finishReason: 'stop' }))
 }
 
-function createOpenAIChunk({ messageId, model, deltaText, finishReason, upstream, choice }: {
-  messageId: string
-  model: string
-  deltaText: string
-  finishReason: string | null
-  upstream?: OpenAIStreamChunk
-  choice?: OpenAIStreamChoice
-}) {
+function createOpenAIChunk({ messageId, model, deltaText, finishReason, upstream, choice }) {
   return {
     id: upstream?.id || messageId,
     object: upstream?.object || 'chat.completion.chunk',
@@ -438,16 +394,7 @@ function createOpenAIChunk({ messageId, model, deltaText, finishReason, upstream
   }
 }
 
-function createChatChunk({ conversationId, parentMessageId, messageId, model, text, finishReason, upstream, choice }: {
-  conversationId: string
-  parentMessageId: string
-  messageId: string
-  model: string
-  text: string
-  finishReason: string | null
-  upstream?: OpenAIStreamChunk
-  choice?: OpenAIStreamChoice
-}) {
+function createChatChunk({ conversationId, parentMessageId, messageId, model, text, finishReason, upstream, choice }) {
   return {
     conversationId,
     id: messageId,
@@ -474,11 +421,11 @@ function createChatChunk({ conversationId, parentMessageId, messageId, model, te
   }
 }
 
-function writeChatChunk(res: ServerResponse, chunk: unknown) {
+function writeChatChunk(res, chunk) {
   res.write(`${JSON.stringify(chunk)}\n`)
 }
 
-function getAiProviderConfig(env: LocalAiEnv): AiProviderConfig {
+function getAiProviderConfig(env) {
   const provider = (env.AI_PROVIDER || 'deepseek').toLowerCase()
 
   if (provider === 'siliconflow') {
@@ -502,107 +449,74 @@ function getAiProviderConfig(env: LocalAiEnv): AiProviderConfig {
   }
 }
 
-function resolveProviderModel(provider: AiProviderConfig, requestedModel?: string) {
+function resolveProviderModel(provider, requestedModel) {
   return requestedModel || provider.model
 }
 
-function getAiModel(env: LocalAiEnv) {
-  return getAiProviderConfig(env).model
-}
-
-function getAiModels(env: LocalAiEnv) {
+function getAiModels(env) {
   const provider = getAiProviderConfig(env)
   const models = provider.customModels || provider.model
   return models.split(',').map(model => model.trim()).filter(Boolean)
 }
 
-function normalizeBaseUrl(url: string) {
+function normalizeBaseUrl(url) {
   return url.replace(/\/$/, '')
 }
 
-function createId(prefix: string) {
+function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function readJsonBody<T = Record<string, unknown>>(req: IncomingMessage): Promise<T> {
+function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = ''
+
     req.on('data', chunk => {
       raw += chunk
+      if (raw.length > 2 * 1024 * 1024) {
+        reject(new Error('Request body too large'))
+        req.destroy()
+      }
     })
+
     req.on('end', () => {
       if (!raw) {
-        resolve({} as T)
+        resolve({})
         return
       }
 
       try {
         resolve(JSON.parse(raw))
       }
-      catch (error) {
-        reject(error)
+      catch {
+        reject(new Error('Invalid JSON body'))
       }
     })
+
     req.on('error', reject)
   })
 }
 
-function sendJson(res: ServerResponse, status: number, payload: unknown) {
+function sendJson(res, status, payload) {
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(payload))
 }
 
-function ok<T>(data: T) {
+function ok(data) {
   return { code: 200, msg: 'success', data, rows: [] }
 }
 
-function fail(code: number, msg: string, data = null) {
+function fail(code, msg, data = null) {
   return { code, msg, data, rows: [] }
 }
 
-function sanitizeError(message: string) {
-  return message.replace(/Bearer\s+[\w.-]+/gi, 'Bearer ***')
+function sanitizeError(message) {
+  return String(message).replace(/Bearer\s+[\w.-]+/gi, 'Bearer ***')
 }
 
-function setupProxy(env: LocalAiEnv) {
-  if (!env.VITE_APP_API_BASE_URL)
-    return undefined
-
-  return {
-    '/uploads': {
-      target: env.VITE_APP_API_BASE_URL,
-      changeOrigin: true,
-    },
-    '/openapi': {
-      target: env.VITE_APP_API_BASE_URL,
-      changeOrigin: true,
-    },
-  }
+function setCommonHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', env.CORS_ORIGIN || '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-ptoken')
 }
-
-export default defineConfig(({ mode }) => {
-  const viteEnv = loadEnv(mode, process.cwd(), '')
-
-  return {
-    resolve: {
-      alias: {
-        '@': path.resolve(process.cwd(), 'src'),
-      },
-    },
-    plugins: setupPlugins(viteEnv),
-    server: {
-      host: '0.0.0.0',
-      port: 1002,
-      open: false,
-      proxy: setupProxy(viteEnv),
-    },
-    build: {
-      reportCompressedSize: false,
-      sourcemap: false,
-      commonjsOptions: {
-        ignoreTryCatch: false,
-      },
-    },
-  }
-})

@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.md)
 
-A modern AI chat application frontend based on Vue 3, supporting ChatGPT, Midjourney and other AI features.
+A local Vue 3 + Vite + TypeScript AI chat application frontend, supporting ChatGPT, Midjourney and other AI features.
 
 ## ✨ Features
 
@@ -27,7 +27,7 @@ A modern AI chat application frontend based on Vue 3, supporting ChatGPT, Midjou
 ## 📋 Requirements
 
 - **Node.js**: >= 16.0.0
-- **npm**: >= 8.0.0 (or use pnpm/yarn)
+- **pnpm**: recommended for installing dependencies and running scripts
 
 ## 🚀 Quick Start
 
@@ -41,81 +41,105 @@ cd ruoyi-web
 ### Install Dependencies
 
 ```bash
-npm install
+pnpm install
 ```
+
+### Configure Local Environment
+
+The project keeps `VITE_GLOB_API_URL=/api`. During local development, the Vite dev server handles the chat API proxy. The root `.env` file should only contain frontend-safe variables:
+
+```env
+# Frontend API base path. Locally, the Vite dev server handles /api.
+VITE_GLOB_API_URL=/api
+
+# Whether long replies are supported.
+VITE_GLOB_OPEN_LONG_REPLY=false
+
+# Whether to enable PWA.
+VITE_GLOB_APP_PWA=false
+```
+
+Put real model API keys in `.env.local`, which should not be committed. Do not use the `VITE_` prefix for secrets:
+
+```env
+# DeepSeek example
+AI_API_BASE_URL=https://api.deepseek.com
+AI_API_KEY=replace-with-your-rotated-key
+AI_MODEL=deepseek-v4-flash
+AI_CUSTOM_MODELS=deepseek-v4-flash,deepseek-v4-pro
+
+# SiliconFlow example
+# AI_API_BASE_URL=https://api.siliconflow.cn
+# AI_API_KEY=replace-with-your-rotated-key
+# AI_MODEL=deepseek-ai/DeepSeek-V3
+# AI_CUSTOM_MODELS=deepseek-ai/DeepSeek-V3,deepseek-ai/DeepSeek-R1
+```
+
+The local proxy currently covers `/api/session`, `/api/verify`, `/api/chat-process` and `/api/system/model/modelList` to restore basic text chat. Uploads, drawing, voice and knowledge-base features still need corresponding backend services.
 
 ### Run Project
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
-The project will start at `http://localhost:1002`
+The project will start at `http://localhost:1002`.
 
 ### Build for Production
 
 ```bash
-npm run build
+pnpm build
 ```
+
+### Preview Production Build
+
+```bash
+pnpm preview
+```
+
+Note: `pnpm preview` only previews the static build output. It does not run the Vite dev server local AI proxy. If the build still uses `/api` as the request prefix, the preview or deployment environment needs a same-origin backend or an extra proxy implementing the same endpoints.
 
 ## 📦 Available Scripts
 
 ```bash
 # Start development server
-npm run dev
+pnpm dev
 
 # Build for production
-npm run build
+pnpm build
 
 # Preview production build
-npm run preview
+pnpm preview
 
 # Type checking
-npm run type-check
+pnpm type-check
 
 # Lint code
-npm run lint
+pnpm lint
 
 # Auto-fix code formatting
-npm run lint:fix
-
-# Documentation development
-npm run docs:dev
-
-# Build documentation
-npm run docs:build
-```
-
-## 🔧 Configuration
-
-The project uses environment variables for configuration. Create a `.env` file as needed:
-
-```env
-# API base URL
-VITE_APP_API_BASE_URL=your_api_url
-
-# Enable PWA
-VITE_GLOB_APP_PWA=true
+pnpm lint:fix
 ```
 
 ## 📁 Project Structure
 
-```
+```text
 ruoyi-web/
 ├── public/                 # Static assets
 ├── src/
-│   ├── api/               # API interfaces
-│   ├── assets/            # Asset files
-│   ├── components/        # Common components
-│   ├── hooks/             # Composition functions
-│   ├── locales/           # Internationalization
-│   ├── router/            # Router configuration
-│   ├── store/             # State management
-│   ├── styles/            # Style files
-│   ├── utils/             # Utility functions
-│   ├── views/             # Page components
-│   └── main.ts            # Entry file
-├── docs/                  # Documentation and screenshots
+│   ├── api/                # Frontend API request modules
+│   ├── assets/             # Asset files
+│   ├── components/         # Common components
+│   ├── hooks/              # Composition functions
+│   ├── locales/            # Internationalization
+│   ├── router/             # Router configuration
+│   ├── store/              # State management
+│   ├── styles/             # Style files
+│   ├── utils/              # Utility functions
+│   ├── views/              # Page components
+│   └── main.ts             # Entry file
+├── index.html              # Vite entry HTML
+├── vite.config.ts          # Vite local development and build config
 └── package.json
 ```
 

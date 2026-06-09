@@ -584,7 +584,7 @@ const showSpeech = computed<boolean>(() => {
                 >模型:{{
                   nGptStore.modelLabel
                     ? truncateText(nGptStore.modelLabel, 20)
-                    : "deepseek/deepseek-r1"
+                    : nGptStore.model
                 }}
                 {{
                   nGptStore.kid
